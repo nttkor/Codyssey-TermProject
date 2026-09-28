@@ -1,0 +1,17 @@
+# 상대 경로는 backend/ 기준입니다. 배포 기본 경로는 /app/data/askmate.db입니다.
+DATABASE_PATH=data/askmate.db
+
+# 필수. 아래 명령으로 생성한 값을 넣으세요. 실제 키는 Git에 올리지 않습니다.
+# uv run python -c "import secrets; print(secrets.token_urlsafe(32))"
+SESSION_SECRET_KEY=85Yxhon5lEmC30w7Xt5u8wmglymRradsf_H4xZ10dR0
+
+# 로그인 후 유효기간(초). 재접속만으로 연장되지 않습니다.
+SESSION_MAX_AGE=3600
+# 로컬 HTTP는 false, HTTPS 배포에서는 true로 설정합니다.
+SESSION_HTTPS_ONLY=false
+
+# AI 통신 설정 (PR #22 머지 후 필요). 실제 키는 Git에 올리지 않습니다.
+AI_API_KEY=sk-cody-live-d9zFcyvUvcCWHxSZXKVWxgccc5k_Py5D_dwdQG_nQHw
+AI_BASE_URL=https://copa.codyssey.kr/v1
+AI_MODEL=gpt-5.4-mini
+AI_TIMEOUT=30
