@@ -52,7 +52,11 @@ class _GatewayHandler(BaseHTTPRequestHandler):
                 {"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}
             ],
         }
+        if behaviour == "malformed":
+            payload = server.payload
         raw = json.dumps(payload).encode()
+        if behaviour == "invalid_json":
+            raw = b'{"choices":'
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(raw)))
@@ -218,3 +222,37 @@ def test_server_recovers_after_failed_call(client, logged_in, connect, gateway):
     gateway.behaviour = "ok"
     assert client.post("/api/chat", json={"question": "복구"}).status_code == 200
     assert [chat["question"] for chat in client.get("/api/me/chats").json()] == ["복구"]
+
+
+@pytest.mark.parametrize("payload", [
+    None, [], {}, {"choices": []}, {"choices": [None]},
+    {"choices": [{"message": None}]},
+    {"choices": [{"message": {"content": 123}}]},
+    {"choices": [{"message": {"content": ["private-answer"]}}]},
+    {"choices": [{"message": {"content": "  "}}]},
+])
+def test_malformed_success_response_is_safe_and_recovers(
+    client, logged_in, connect, gateway, caplog, payload,
+):
+    gateway.behaviour = "malformed"
+    gateway.payload = payload
+    with caplog.at_level(logging.INFO):
+        response = client.post("/api/chat", json={"question": "private-question"})
+    assert response.status_code == 502
+    assert client.get("/api/me/chats").json() == []
+    assert "ai_call_failure" in caplog.text
+    for secret in ("private-question", "private-answer", "test-gateway-key"):
+        assert secret not in response.text
+        assert secret not in caplog.text
+    gateway.behaviour = "ok"
+    assert client.post("/api/chat", json={"question": "복구"}).status_code == 200
+    assert [chat["question"] for chat in client.get("/api/me/chats").json()] == ["복구"]
+
+
+def test_invalid_json_response_is_safe(client, logged_in, connect, gateway, caplog):
+    gateway.behaviour = "invalid_json"
+    with caplog.at_level(logging.INFO):
+        response = client.post("/api/chat", json={"question": "형식 오류"})
+    assert response.status_code == 502
+    assert "ai_call_failure" in caplog.text
+    assert client.get("/api/me/chats").json() == []
