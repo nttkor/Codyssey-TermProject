@@ -5,6 +5,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from app.config_validation import parse_ai_timeout
+
 APP_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = APP_DIR.parent
 
@@ -48,10 +50,5 @@ AI_MODEL = os.getenv("AI_MODEL", "").strip()
 if not AI_MODEL:
     raise RuntimeError("AI_MODEL을 .env 또는 실행 환경에 설정하세요.")
 
-try:
-    # OpenAI SDK 클라이언트가 사용하는 전체 요청 제한 시간(초)이다.
-    AI_TIMEOUT = float(os.getenv("AI_TIMEOUT", "30"))
-except ValueError:
-    raise RuntimeError("AI_TIMEOUT은 초 단위의 양수여야 합니다.") from None
-if AI_TIMEOUT <= 0:
-    raise RuntimeError("AI_TIMEOUT은 초 단위의 양수여야 합니다.")
+# OpenAI SDK의 요청 타임아웃(초). 배포 사전 검사와 같은 검증을 사용한다.
+AI_TIMEOUT = parse_ai_timeout(os.getenv("AI_TIMEOUT", "30"))
