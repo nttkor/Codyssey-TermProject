@@ -1093,7 +1093,201 @@ def logout(request: Request) -> Response:
 
 ---
 
-## 12. 핵심 요약
+## 12. FastAPI와 데이터베이스(DB) 트랜잭션 처리 구조
+
+AskMate는 비동기 ASGI 웹 프레임워크인 **FastAPI**와 파이썬의 표준 ORM인 **SQLAlchemy 2.0**을 결합하여, 동시 요청 환경에서도 데이터베이스 일관성(ACID)과 고성능 비동기 처리를 양립시키는 견고한 트랜잭션 파이프라인을 구축했다.
+
+---
+
+### 12.1 요청 단위 세션 라이프사이클 관리 (`Depends(get_db)`)
+
+FastAPI의 의존성 주입(Dependency Injection) 시스템과 파이썬 제너레이터(컨텍스트 매니저)를 활용하여, **하나의 HTTP 요청마다 독립된 DB 세션을 할당하고 요청 처리가 완료되면 자동으로 세션을 닫아 커넥션을 반환**한다.
+
+#### 1. 세션 제너레이터 구현 (`backend/app/db_connect.py`)
+```python
+def get_db() -> Generator[Session, None, None]:
+    """FastAPI 경로 작동 함수(Route handler)에 주입할 요청별 독립 DB 세션을 제공합니다.
+
+    [기술 설명]
+    - FastAPI의 `Depends(get_db)`를 통해 호출되며 Python 제너레이터로 동작합니다.
+    - 요청 시작 시 `SessionLocal()`로 전용 세션을 생성하고 `yield`로 전달합니다.
+    - 요청 처리가 끝나면(성공 또는 에러 무관) `with` 블록 종료 시 세션을 자동으로 닫습니다(close).
+    - 트랜잭션 원자성을 위해 쓰기 작업의 commit 및 rollback은 세션을 사용하는 비즈니스 로직에서 명시적으로 제어합니다.
+    """
+    with SessionLocal() as session:
+        yield session
+```
+
+#### 2. 라우터에서의 주입 및 사용 (`backend/app/llm.py` & `backend/app/account.py`)
+```python
+@router.post("/chat", dependencies=[Depends(require_csrf_header)])
+async def chat(
+    payload: ChatRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],  # HTTP 요청 라이프사이클에 바인딩된 DB 세션 주입
+):
+    ...
+```
+
+- **동작 원리**:
+  1. 클라이언트 요청이 들어오면 FastAPI는 `get_db()` 제너레이터를 실행하여 `SessionLocal()`로부터 새로운 `Session` 객체를 생성한다.
+  2. `yield session`을 통해 라우터 함수(`chat`, `signup`, `login` 등)에 세션 객체가 전달되어 사용된다.
+  3. 라우터 함수의 응답이 반환되거나 도중에 예외(`HTTPException` 등)가 발생하여 요청이 종료되면, `get_db()`의 `with SessionLocal() as session:` 블록을 빠져나오며 `session.close()`가 100% 호출된다.
+  4. 이를 통해 커넥션 누수(Connection Leak)가 발생하지 않으며, 요청 간의 상태 오염이 원천 차단된다.
+
+---
+
+### 12.2 비동기 이벤트 루프와 동기 DB 트랜잭션의 격리 (`run_in_threadpool`)
+
+FastAPI는 기본적으로 단일 스레드 기반의 비동기 이벤트 루프(Event Loop)에서 실행된다. 반면 SQLAlchemy의 SQLite 드라이버는 동기식 파일 I/O로 동작한다.
+
+만약 비동기 라우터(`async def`) 내부에서 동기 DB 쿼리를 직접 실행하면, 디스크 I/O 대기 시간 동안 이벤트 루프가 멈추어(Blocking) 다른 모든 사용자의 요청 처리가 지연된다.
+
+AskMate는 이를 방지하기 위해 **Starlette의 `run_in_threadpool`을 사용하여 동기 DB 트랜잭션을 별도의 워커 스레드 풀로 격리**한다.
+
+#### 비동기 스레드 풀 격리 코드 (`backend/app/llm.py`)
+```python
+# 1단계: 최근 대화 문맥 조회 (동기 DB 읽기를 스레드 풀에 위임)
+try:
+    chats = await run_in_threadpool(get_recent_chats_by_user, db, user_id)
+except SQLAlchemyError:
+    logger.exception("db_read_failure operation=chat_context user_id=%s", user_id)
+    raise HTTPException(status_code=500, detail="최근 대화 기록을 불러오지 못했습니다.") from None
+
+# ... 비동기 외부 AI API 통신 (이벤트 루프 활용) ...
+
+# 4단계: 정상 답변 수신 완료 시 질문·답변 한 쌍을 DB에 저장 (동기 DB 쓰기를 스레드 풀에 위임)
+try:
+    chat_id = await run_in_threadpool(create_chat, db, user_id, payload.question, answer)
+except SQLAlchemyError:
+    logger.exception("db_save_failure operation=chat user_id=%s", user_id)
+    raise HTTPException(status_code=500, detail="대화 기록을 저장하지 못했습니다.") from None
+```
+
+- **기술적 이점**:
+  - 무거운 DB 파일 읽기/쓰기가 진행되는 동안에도 FastAPI 메인 이벤트 루프는 쉬지 않고 다른 클라이언트의 로그인, 정적 파일 서빙, 헬스체크(`/health`)를 논블로킹으로 동시 처리할 수 있다.
+
+---
+
+### 12.3 데이터 접근 계층(DAL)의 원자적 트랜잭션 제어 (Commit & Rollback)
+
+데이터의 일관성과 원자성(Atomicity)을 보장하기 위해, 모든 쓰기(INSERT/UPDATE/DELETE) 트랜잭션은 **`flush()` ➔ `commit()` ➔ 실패 시 `rollback()`** 패턴으로 구현되었다.
+
+#### 1. 대화 기록 트랜잭션 (`backend/app/chat_db.py`)
+```python
+def create_chat(db: Session, user_id: int, question: str, answer: str) -> int:
+    """질문과 AI 답변 한 쌍을 데이터베이스에 영구 저장하고 생성된 기록 ID를 반환합니다."""
+    chat = Chat(user_id=user_id, question=question, answer=answer)
+    db.add(chat)
+    try:
+        db.flush()      # 1. DB에 쿼리를 전송하여 기본키(chat.id)를 채번/확보
+        chat_id = chat.id
+        db.commit()     # 2. 트랜잭션을 디스크에 영구 반영
+    except SQLAlchemyError:
+        db.rollback()   # 3. 예외 발생 시 보류 중인 모든 변경사항을 취소하고 세션을 복원
+        raise           # 4. 상위 라우터가 500 에러 처리 및 로깅을 할 수 있도록 재전파
+    return chat_id
+```
+
+#### 2. 사용자 계정 생성 트랜잭션 (`backend/app/account_db.py`)
+```python
+def create_user(db: Session, username: str, password_hash: str) -> int:
+    """신규 사용자를 데이터베이스에 저장하고 발급된 고유 사용자 ID를 반환합니다."""
+    user = User(username=username, password_hash=password_hash)
+    db.add(user)
+    try:
+        db.flush()      # UNIQUE 제약조건 검사 실행 및 user.id 확보
+        user_id = user.id
+        db.commit()     # 최종 커밋
+    except SQLAlchemyError:
+        db.rollback()   # 고유 제약조건 위반(중복 아이디) 시 롤백하여 세션 정상화
+        raise
+    return user_id
+```
+
+- **핵심 메커니즘**:
+  1. **`db.flush()`의 활용**: 트랜잭션을 최종 커밋하기 전, 데이터베이스 엔진에 INSERT 쿼리를 실행시켜 데이터베이스가 자동 생성한 Auto-increment 기본키(`id`)를 즉시 획득한다.
+  2. **원자적 실패 복구 (`db.rollback()`)**: 동시 가입으로 인한 고유 제약조건 위반(`IntegrityError`)이나 디스크 입출력 에러 발생 시 즉각 롤백을 수행하여 세션 내에 깨진 변경사항이 잔류하지 않도록 세션을 깨끗한 상태로 되돌린다.
+  3. **AI 통신 실패 시 미저장 원칙**: AI 모델 호출이 완료되어 100% 온전한 응답을 획득했을 때만 `create_chat`을 호출하므로, AI 오류 시 반쪽짜리 쓰레기 대화 데이터가 DB에 남는 일이 구조적으로 불가능하다.
+
+---
+
+### 12.4 멀티스레드 환경 및 보안을 위한 엔진 설정 (`backend/app/db_connect.py`)
+
+SQLite 엔진 인스턴스를 생성할 때 멀티스레드 동시성과 데이터 무결성, 보안을 보장하는 특수 옵션들을 구성했다.
+
+```python
+engine = create_engine(
+    URL.create("sqlite", database=str(DATABASE_PATH)),
+    connect_args={"check_same_thread": False},  # 1. 멀티스레드 세션 공유 지원
+    hide_parameters=True,                       # 2. 쿼리 파라미터(비밀번호 등) 로그 마스킹
+)
+
+@event.listens_for(engine, "connect")
+def enable_foreign_keys(connection, connection_record):
+    """새로운 SQLite DB 커넥션이 열릴 때마다 외래키 제약조건 검사를 활성화합니다."""
+    cursor = connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")    # 3. 외래키 참조 무결성 강제
+    cursor.close()
+```
+
+1. **`check_same_thread=False`**:
+   - SQLite의 기본 동작은 커넥션을 생성한 단일 스레드에서만 사용하도록 제한한다.
+   - FastAPI는 요청 처리 중 비동기 이벤트 루프와 워커 스레드 풀(`run_in_threadpool`)을 오가므로, 이 옵션을 `False`로 지정해야 스레드 전환 시 `ProgrammingError`가 발생하지 않는다.
+2. **`hide_parameters=True`**:
+   - DB 에러 발생 시 예외 객체나 로그에 바인딩된 파라미터 값(사용자 비밀번호 해시, 개인 질문 내용 등)이 평문으로 남지 않도록 자동으로 마스킹(`[SQL: ...] [parameters: [redacted]]`)한다.
+3. **`PRAGMA foreign_keys=ON`**:
+   - SQLite는 하위 호환성을 이유로 기본적으로 외래키(FK) 검사를 수행하지 않는다.
+   - 커넥션 풀에서 새 연결이 초기화될 때마다 이벤트 리스너를 통해 외래키를 활성화하여, `chats.user_id`가 존재하지 않는 유저를 참조하는 데이터 고아 현상을 차단한다.
+
+---
+
+### 12.5 전체 DB 트랜잭션 라이프사이클 흐름도
+
+```text
+[클라이언트 요청] ──→ POST /api/chat
+         │
+         ▼
+[FastAPI 의존성 주입]
+ ├── get_db() 제너레이터 실행
+ │     └── session = SessionLocal() (새 세션 오픈)
+ ├── get_current_user (세션 기반 유저 인증)
+ └── require_csrf_header (CSRF 헤더 검증)
+         │
+         ▼
+[1. 문맥 조회 트랜잭션]
+ └── run_in_threadpool(get_recent_chats_by_user, db, user_id)
+       ├── 워커 스레드로 전환
+       ├── SELECT * FROM chats WHERE user_id = ? ORDER BY ... LIMIT 5
+       └── 결과 리스트 반환 (읽기 전용, 락 해제)
+         │
+         ▼
+[2. 외부 AI 통신 (Non-blocking I/O)]
+ └── await llm_connect.generate_answer(...)
+       └── 외부 API 대기 중 (DB 세션은 유휴 상태 유지)
+         │
+   ┌─────┴─────────────────────────┐
+   │ [AI 통신 실패 (502/504)]       │ [AI 통신 성공 (200)]
+   ▼                               ▼
+[DB 저장 생략]            [3. 저장 트랜잭션 실행]
+(미저장 원칙 적용)         └── run_in_threadpool(create_chat, db, user_id, ...)
+                                  ├── db.add(chat)
+                                  ├── db.flush() (INSERT 실행 및 PK 추출)
+                                  ├── db.commit() (영구 커밋)
+                                  └── 예외 발생 시 db.rollback()
+         │                                 │
+         └────────────────┬────────────────┘
+                          ▼
+[요청 종료 및 세션 반환]
+ └── get_db()의 with 블록 종료 ➔ session.close() (커넥션 풀 반환)
+         │
+         ▼
+[클라이언트에 JSON 응답 반환]
+```
+
+---
+
+## 13. 핵심 요약
 
 - **배포 주소 접속 (`http://134.185.97.62/`)**:
   - 기본 HTTP 포트인 80번 포트로 OCI 호스트에 접근하여 Docker 포트포워딩을 통해 컨테이너 내부 Uvicorn(8000)으로 전달된다.
@@ -1104,9 +1298,12 @@ def logout(request: Request) -> Response:
   - JavaScript는 사용자의 행동과 서버 API를 비동기로 연결하여 화면의 일부분만 동적으로 바꾼다.
 - **안전한 한글 입력**:
   - 한글 자모 조합 중(IME `isComposing`) 누르는 Enter는 질문 전송을 차단하여 글자 중복과 오작동을 방지한다.
-- **데이터베이스 저장 원칙**:
-  - AI 호출이 성공하고 응답 검증을 통과했을 때만 질문과 답변을 SQLite DB에 저장한다. AI 오류 시에는 저장하지 않는다.
+- **FastAPI & DB 트랜잭션**:
+  - `get_db` 제너레이터로 요청 단위 세션 자동 할당 및 `close()` 반환.
+  - `run_in_threadpool`을 통해 동기 DB 작업을 워커 스레드로 격리하여 비동기 이벤트 루프 블로킹 방지.
+  - `flush()` ➔ `commit()` ➔ 실패 시 `rollback()` 원자적 트랜잭션과 AI 성공 시에만 저장하는 미저장 원칙 준수.
 - **로그아웃 안전성**:
   - 로그아웃은 서버 응답이 204 성공일 때만 페이지를 이동하며, 실패 시 에러 안내와 재시도를 지원한다.
+
 
 
