@@ -88,13 +88,27 @@ function initPasswordToggles() {
 // 네비게이션 및 로그아웃 초기화
 function initNavbar() {
     const logoutBtn = document.getElementById("navLogoutBtn");
+    const logoutError = document.getElementById("logoutError");
     if (logoutBtn) {
         logoutBtn.addEventListener("click", async () => {
+            if (logoutBtn.disabled) return;
             logoutBtn.disabled = true;
+            if (logoutError) logoutError.style.display = "none";
             try {
-                await apiRequest("/api/logout", { method: "POST" });
+                const res = await apiRequest("/api/logout", {
+                    method: "POST",
+                    skipAuthRedirect: true,
+                });
+                if (res.ok && res.status === 204) {
+                    window.location.assign("/login");
+                    return;
+                }
+                if (logoutError) {
+                    logoutError.textContent = "로그아웃에 실패했습니다. 연결 상태를 확인하고 다시 시도해 주세요.";
+                    logoutError.style.display = "flex";
+                }
             } finally {
-                window.location.assign("/login");
+                logoutBtn.disabled = false;
             }
         });
     }

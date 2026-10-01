@@ -12,6 +12,7 @@ llm.py와의 연결
 """
 
 import time
+from json import JSONDecodeError
 
 from openai import APITimeoutError, AsyncOpenAI, OpenAIError
 
@@ -73,7 +74,7 @@ async def generate_answer(question: str, history: list[dict[str, str]]) -> str:
             "ai_call_timeout model=%s elapsed=%.3f", AI_MODEL, time.monotonic() - started_at
         )
         raise AITimeoutError("AI 응답이 제한 시간을 초과했습니다.") from None
-    except OpenAIError as error:
+    except (OpenAIError, JSONDecodeError) as error:
         # 연결 실패, 인증 실패, 제공자 4xx/5xx 등 SDK 계열 오류는 HTTP 502 대상으로 묶는다.
         # 제공자 응답 본문에는 키나 내부 정보가 섞일 수 있으므로 예외 종류만 남긴다.
         logger.warning(
@@ -87,8 +88,16 @@ async def generate_answer(question: str, history: list[dict[str, str]]) -> str:
     elapsed = time.monotonic() - started_at
 
     # HTTP 200이어도 choices가 없거나 content가 공백이면 정상 답변으로 저장하지 않는다.
-    choices = completion.choices or []
-    answer = (choices[0].message.content or "").strip() if choices else ""
+    choices = getattr(completion, "choices", None)
+    message = getattr(choices[0], "message", None) if isinstance(choices, list) and choices else None
+    content = getattr(message, "content", None)
+    if not isinstance(content, str):
+        logger.warning(
+            "ai_call_failure model=%s elapsed=%.3f error_type=InvalidAnswer",
+            AI_MODEL, elapsed,
+        )
+        raise AIServiceError("AI 응답 형식이 올바르지 않습니다.") from None
+    answer = content.strip()
     if not answer:
         logger.warning("ai_call_failure model=%s elapsed=%.3f error_type=EmptyAnswer", AI_MODEL, elapsed)
         raise AIServiceError("AI가 빈 답변을 반환했습니다.")
