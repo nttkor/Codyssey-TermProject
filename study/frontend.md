@@ -1,6 +1,6 @@
-# B7-1 프론트엔드 공부 노트
+# AskMate 프론트엔드 공부 노트
 
-**기준:** `fix/qa-findings` / `9e3038b`. 코드 경로는 `B7-1/backend/` 기준입니다. 전체 호출 순서는 [flow.md](flow.md)를 함께 읽어 주세요.
+**기준:** `fix/qa-findings` / `baa13d5` (PR #36 반영 완료). 코드 경로는 `backend/` 기준입니다. 전체 호출 순서는 [flow.md](flow.md)를 함께 읽어 주세요.
 
 ## 1. 프론트엔드가 맡는 일
 

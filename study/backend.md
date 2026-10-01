@@ -1,6 +1,6 @@
-# B7-1 백엔드 공부 노트
+# AskMate 백엔드 공부 노트
 
-**기준:** `fix/qa-findings` / `9e3038b`. 코드 경로는 `B7-1/backend/` 기준입니다. DB 세부 내용은 [database.md](database.md), 기능 호출 순서는 [flow.md](flow.md)에 있습니다.
+**기준:** `fix/qa-findings` / `baa13d5` (PR #36 반영 완료). 코드 경로는 `backend/` 기준입니다. DB 세부 내용은 [database.md](database.md), 기능 호출 순서는 [flow.md](flow.md)에 있습니다.
 
 ## 1. 백엔드는 무엇을 책임지나요?
 

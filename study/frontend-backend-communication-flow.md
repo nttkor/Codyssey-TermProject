@@ -153,7 +153,7 @@ form.addEventListener("submit", async (event) => {
 
 ## 4. 사용자가 질문을 전송했을 때
 
-### 4.1 전송 버튼에서 `submit` 이벤트가 발생한다
+### 4.1 전송 버튼과 Enter 키 입력 (`submit` 이벤트)
 
 전송 버튼은 다음과 같이 `type="submit"`으로 정의되어 있다.
 
@@ -161,7 +161,16 @@ form.addEventListener("submit", async (event) => {
 <button type="submit" id="chatSendBtn">전송</button>
 ```
 
-버튼을 누르면 버튼이 속한 `form`의 `submit` 이벤트가 발생한다. 입력창에서 Enter를 눌러도 같은 이벤트를 발생시킬 수 있다.
+버튼을 누르면 버튼이 속한 `form`의 `submit` 이벤트가 발생한다. 입력창(`textarea`)에서 Enter를 눌러도 자바스크립트 `keydown` 이벤트를 통해 폼 제출을 실행할 수 있다.
+
+> **💡 한글 입력(IME 조합)과 Enter 오작동 방지**:
+> 한글, 일본어 등은 자음과 모음이 합쳐지는 **조합 문자(IME)**다. 사용자가 한글 입력을 마치고 글자를 확정 짓기 위해 Enter를 누르는 순간, 브라우저는 아직 글자를 조합 중(`compositionstart` ~ `compositionend`)으로 인식할 수 있다.
+> 만약 이를 그대로 전송하면 **마지막 글자가 중복되거나 미완성된 상태에서 질문이 의도치 않게 전송**된다.
+> 따라서 `chat.js`는 다음 조건을 확인하여 조합 확정용 Enter는 전송을 무시하도록 방어한다.
+> ```javascript
+> if (isComposing || e.isComposing || e.keyCode === 229) return;
+> ```
+> 또한 `Shift + Enter`는 전송하지 않고 텍스트 에어리어에서 줄바꿈을 유지하도록 처리한다.
 
 ### 4.2 일반적인 HTML 폼 제출을 중단한다
 
@@ -234,14 +243,17 @@ X-Requested-With: XMLHttpRequest
 FastAPI 서버는 `POST /api/chat` 요청을 받으면 다음 순서로 처리한다.
 
 ```text
-1. X-Requested-With 헤더 확인
-2. 로그인 세션 확인
-3. 질문이 1~1,000자인지 검증
-4. 현재 사용자의 최근 대화 5쌍을 DB에서 조회
-5. 최근 대화와 현재 질문을 AI 서비스로 전송
-6. AI 답변 수신
-7. 질문과 답변을 SQLite DB에 저장
-8. JSON 응답 반환
+1. CSRF 헤더 검사 (X-Requested-With: XMLHttpRequest)
+2. 로그인 세션 확인 (get_current_user)
+3. 질문 본문 검증 (1~1,000자, 공백만 있는 문자열 차단)
+4. 현재 사용자의 최근 대화 5쌍을 DB에서 조회 (오름차순 문맥)
+5. 최근 대화와 현재 질문을 AsyncOpenAI 클라이언트로 전송
+6. AI 응답 수신 및 안전성 검증:
+   ├── OpenAIError / JSON 파싱 에러(JSONDecodeError) 발생 시 → 502 변환
+   ├── choices 누락, content 타입 불일치(문자열 아님) 등 비정상 페이로드 → 502 (InvalidAnswer)
+   └── content가 빈 문자열("")인 경우 → 502 (EmptyAnswer)
+7. 성공적으로 검증된 질문과 답변만 SQLite DB에 저장 (chat_db.create_chat)
+8. JSON 응답 반환 {"answer": "..."}
 ```
 
 응답은 전체 HTML이 아니라 데이터만 포함한 JSON이다.
@@ -252,7 +264,9 @@ FastAPI 서버는 `POST /api/chat` 요청을 받으면 다음 순서로 처리�
 }
 ```
 
-AI 호출에 실패하거나 빈 답변을 받으면 질문과 답변을 데이터베이스에 저장하지 않는다.
+> **🛡️ AI 통신 실패 시 DB 미저장 원칙**:
+> AI 호출에 실패(502/504)하거나 비정상/빈 답변을 받으면 **질문과 답변을 데이터베이스에 저장하지 않는다.**
+> 또한 외부 AI 제공자의 상세 오류나 API 키는 사용자 응답에 절대 포함하지 않고, 안전하게 추상화된 한국어 안내문구만 전달한다.
 
 ## 7. `response`와 화면 변경의 관계
 
@@ -340,6 +354,8 @@ HTML 파일 자체가 수정되는 것은 아니다. 브라우저 메모리에 �
 
 ## 9. 전체 통신 흐름
 
+### 9-1. 질문 및 답변 통신 흐름
+
 ```text
 브라우저에서 /chat 접속
         ↓
@@ -353,7 +369,7 @@ Jinja2로 chat.html 생성 및 반환
         ↓
 브라우저가 CSS와 JavaScript 추가 요청
         ↓
-화면 표시 및 JavaScript 이벤트 연결
+화면 표시 및 JavaScript 이벤트 연결 (IME 조합 및 Enter 처리)
         ↓
 사용자가 질문 입력 후 전송
         ↓
@@ -363,15 +379,39 @@ JavaScript가 POST /api/chat 요청
         ↓
 FastAPI가 최근 대화 5쌍 조회
         ↓
-외부 AI 서비스 호출
+외부 AI 서비스 호출 및 안전한 응답 검증
         ↓
-AI 답변을 SQLite에 저장
+정상 답변 시 SQLite에 저장 (실패 시 미저장 & 502/504)
         ↓
 JSON 응답 반환
         ↓
 JavaScript가 JSON에서 답변 추출
         ↓
-현재 채팅 화면에 답변 말풍선 추가
+현재 채팅 화면에 답변 말풍선 추가 (오류 시 재시도 버튼 표시)
+```
+
+### 9-2. 로그아웃 통신 흐름과 안정성 보장 (`POST /api/logout`)
+
+상단 메뉴의 로그아웃 동작은 단순 링크 이동이 아니라 비동기 API 요청을 통해 세션을 파기하고 결과를 검증한다.
+
+```text
+사용자가 상단 로그아웃 버튼(#navLogoutBtn) 클릭
+        ↓
+로그아웃 버튼 잠금 (disabled = true, 중복 요청 차단)
+기존 로그아웃 에러 배너(#logoutError) 숨김
+        ↓
+common.js가 POST /api/logout 비동기 요청 (CSRF 헤더 포함)
+        ↓
+FastAPI 서버: 세션 초기화 (request.session.clear())
+        ↓
+HTTP 204 No Content 응답 반환
+        ↓
+브라우저 검증:
+  ├── [204 성공] → window.location.assign("/login") 으로 안전하게 이동
+  └── [실패(200, 401, 500, 네트워크 단절)]
+        ├─ 화면 이동 없이 현재 페이지 유지 (오작동 착각 방지)
+        ├─ #logoutError 배너 표시: "로그아웃에 실패했습니다. 다시 시도해 주세요."
+        └─ finally 블록에서 버튼 잠금 해제 (disabled = false) → 즉시 재시도 가능
 ```
 
 ## 10. 핵심 요약
@@ -381,8 +421,10 @@ JavaScript가 JSON에서 답변 추출
 - JavaScript는 사용자의 행동과 서버 API를 연결한다.
 - `/chat`은 채팅 HTML 화면을 제공한다.
 - `/api/chat`은 질문을 받아 AI 답변 데이터를 반환한다.
+- 한글 조합 중(IME `isComposing`) 누르는 Enter는 질문 전송을 차단하여 한글 중복 입력을 방지한다.
 - `response`는 함수가 아니라 HTTP 응답 객체다.
 - JavaScript가 응답에서 데이터를 꺼내 DOM을 변경한다.
 - `event.preventDefault()`와 `fetch()`를 사용하기 때문에 페이지 전체를 새로고침하지 않아도 된다.
-- JavaScript 없이도 HTML 폼으로 질문과 답변을 처리할 수 있지만, 그 방식은 일반적으로 요청할 때마다 새로운 HTML 페이지를 받는다.
+- AI 실패 시 데이터베이스에 질문과 답변을 저장하지 않는다.
+- 로그아웃은 서버 응답이 204 성공일 때만 페이지를 이동하며, 실패 시 에러 안내와 재시도를 지원한다.
 
