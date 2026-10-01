@@ -5,6 +5,19 @@ Jinja2 로그인·회원가입·채팅·기록 화면과 세션 인증, SQLite �
 AI 통신 함수에 로그인 사용자의 최근 5쌍을 문맥으로 전달하고, OpenAI 호환 게이트웨이로 답변을 받습니다.
 화면별 JavaScript가 API와 연결되어 로그인 이동, AI 응답 로딩·재시도, 대화 기록 표시를 처리합니다.
 
+## 프로젝트 개요
+
+별도 프로그램 설치 없이 웹에서 질문하고, 이전 대화를 이어가거나 다시 확인할 수 있도록 만들었습니다.
+일상적인 궁금증을 해결하고 싶은 사용자, 학습 질문·글 요약·문장 수정에 AI를 활용하려는 사용자가 대상입니다.
+
+핵심 시나리오는 회원가입 → 로그인 → 질문 입력 → 최근 5쌍을 포함한 AI 응답 확인 → 내 대화 기록 조회입니다.
+브라우저는 같은 출처의 FastAPI API를 호출하고, 서버가 세션 인증·AI 통신·SQLite 저장을 처리합니다.
+AI 키는 서버 환경 변수로 관리하며, 기록 조회와 문맥 구성은 로그인한 사용자 기준으로 제한합니다.
+
+- 저장소: [Codyssey-TermProject](https://github.com/seven2762/Codyssey-TermProject)
+- 팀 작업 내역: [팀원별 역할과 기여 근거](docs/TEAM.md)
+- 검증 방법과 범위: [테스트·시연 가이드](docs/TESTING.md)
+
 ## 개발 환경
 
 - Python 3.14.x (`backend/.python-version` 기준)
@@ -100,6 +113,10 @@ AI 통신에는 `AI_API_KEY`, `AI_BASE_URL`, `AI_MODEL`이 필요하며 `AI_TIME
 전체 API 요청·응답은 [API 명세](docs/API.md), 세션 정책은 [계정·세션 인증 안내](docs/AUTH.md)를 참고하세요.
 
 ## 배포
+
+제출용 접속 주소는 [AskMate](http://134.185.97.62/)입니다.
+2026-09-29 담당자가 제공한 주소이며, 이번 QA는 로컬에서만 수행했습니다.
+평가 시점의 외부 접근 가능 여부와 배포 버전은 별도로 확인해야 합니다.
 
 GitHub Actions에서 Docker 이미지를 `2hynmin/codyssey-term`에 게시하고 Tailscale을
 통해 OCI Compute 인스턴스에 배포합니다. OCI와 GitHub Secrets 준비, Tailnet 접근

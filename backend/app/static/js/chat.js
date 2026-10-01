@@ -18,6 +18,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     let lastFailedQuestion = "";
     let isSubmitting = false;
+    let isComposing = false;
 
     // 스크롤 맨 아래로 이동
     function scrollToBottom() {
@@ -52,9 +53,13 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     chatInput.addEventListener("input", updateCharCounter);
+    chatInput.addEventListener("compositionstart", () => { isComposing = true; });
+    chatInput.addEventListener("compositionend", () => { isComposing = false; });
 
     // Enter 키로 전송 (Shift+Enter는 줄바꿈)
     chatInput.addEventListener("keydown", (e) => {
+        // IME 조합 확정 Enter는 전송이 아니다. 일부 브라우저는 keyCode 229만 전달한다.
+        if (isComposing || e.isComposing || e.keyCode === 229) return;
         if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
             if (!sendBtn.disabled) {

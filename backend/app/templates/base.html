@@ -35,6 +35,9 @@
     </header>
 
     <main class="main-content">
+        {% if user %}
+        <div id="logoutError" class="alert alert-danger" role="alert" style="display: none;"></div>
+        {% endif %}
         {% block content %}{% endblock %}
     </main>
 

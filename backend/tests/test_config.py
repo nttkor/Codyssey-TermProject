@@ -23,9 +23,11 @@ SESSION_NAMES = ("SESSION_SECRET_KEY", "SESSION_MAX_AGE", "SESSION_HTTPS_ONLY")
 
 
 @pytest.fixture
-def config_file(tmp_path):
+def config_file(tmp_path, monkeypatch):
     app_dir = tmp_path / "app"
     app_dir.mkdir()
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path))
+    shutil.copy(BACKEND_DIR / "app/config_validation.py", app_dir / "config_validation.py")
     return Path(shutil.copy(BACKEND_DIR / "app/config.py", app_dir / "config.py"))
 
 
@@ -65,6 +67,11 @@ def test_invalid_session_settings_fail_startup(config_file, settings, error_name
         ({"AI_TIMEOUT": "0"}, "AI_TIMEOUT"),
         ({"AI_TIMEOUT": "-1"}, "AI_TIMEOUT"),
         ({"AI_TIMEOUT": "abc"}, "AI_TIMEOUT"),
+        ({"AI_TIMEOUT": "nan"}, "AI_TIMEOUT"),
+        ({"AI_TIMEOUT": "inf"}, "AI_TIMEOUT"),
+        ({"AI_TIMEOUT": "-inf"}, "AI_TIMEOUT"),
+        ({"AI_TIMEOUT": "1e999"}, "AI_TIMEOUT"),
+        ({"AI_TIMEOUT": "0.0"}, "AI_TIMEOUT"),
     ],
 )
 def test_invalid_ai_settings_fail_startup(config_file, settings, error_name):
@@ -157,3 +164,19 @@ with TestClient(app, base_url='https://testserver', headers={'X-Requested-With':
         [sys.executable, "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("value, valid", [
+    ("nan", False), ("inf", False), ("-inf", False), ("1e999", False),
+    ("0", False), ("0.0", False), ("-1", False), ("abc", False),
+    ("0.5", True), ("30", True), ("1e1", True),
+])
+def test_deployment_timeout_validation(value, valid):
+    """Actions에서 쓰는 실제 표준 라이브러리 스크립트를 로컬에서 실행한다."""
+    result = subprocess.run(
+        [sys.executable, str(BACKEND_DIR / "app/config_validation.py")],
+        env={**os.environ, "AI_TIMEOUT": value}, capture_output=True, text=True,
+    )
+    assert (result.returncode == 0) == valid
+    if not valid:
+        assert "AI_TIMEOUT" in result.stderr
