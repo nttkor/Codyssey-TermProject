@@ -76,6 +76,16 @@ form.addEventListener("submit", async (event) => {
     // 질문 전송 코드
 });
 ```
+정확하게 이해하셨습니다!
+
+과거에는 HTML 태그 안에 직접 `onclick="전송함수()"`처럼 자바스크립트 동작을 섞어서 작성하기도 했지만, 현대 웹 개발에서는 방금 파악하신 것처럼 **HTML에는 뼈대와 식별자(`id`, `class`)만 남겨두고, 실제 동작은 자바스크립트 파일에서 따로 `addEventListener`로 연결해 주는 방식**을 표준으로 사용합니다.
+
+이를 개발 용어로 '관심사의 분리(Separation of Concerns)'라고 부릅니다. 코드를 목적에 맞게 분리해 두면 유지보수하기가 훨씬 쉬워지기 때문입니다.
+
+추가로 눈여겨보실 점은 버튼 태그에 있는 `type="submit"` 속성입니다.
+버튼에 이 속성이 있으면 사용자가 버튼을 클릭했을 때 브라우저가 알아서 버튼이 속한 `<form>` 전체를 제출(submit)하려는 이벤트를 발생시킵니다.
+
+그래서 [문서의 4.4 항목](https://github.com/nttkor/Codyssey-TermProject/blob/nttkor/study/frontend-backend-communication-flow.md#44-javascript%EA%B0%80-%EC%9D%B4%EB%B2%A4%ED%8A%B8%EB%A5%BC-%EC%97%B0%EA%B2%B0%ED%95%9C%EB%8B%A4)을 보면, 자바스크립트가 버튼 자체의 `click` 이벤트를 감지하는 대신 폼(form)의 `submit` 이벤트를 감지하도록 `form.addEventListener("submit", ...)` 형태로 작성되어 있는 것을 확인할 수 있습니다.
 
 이 단계에서는 아직 AI를 호출하지 않는다. 나중에 사용자가 질문을 전송했을 때 실행할 동작만 준비한다.
 
