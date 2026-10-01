@@ -1096,7 +1096,67 @@ def logout(request: Request) -> Response:
 ## 12. FastAPI와 데이터베이스(DB) 트랜잭션 처리 구조
 
 AskMate는 비동기 ASGI 웹 프레임워크인 **FastAPI**와 파이썬의 표준 ORM인 **SQLAlchemy 2.0**을 결합하여, 동시 요청 환경에서도 데이터베이스 일관성(ACID)과 고성능 비동기 처리를 양립시키는 견고한 트랜잭션 파이프라인을 구축했다.
+---
+  ### ORM(Object-Relational Mapping, 객체-관계 매핑)이란?
 
+  **ORM(객체-관계 매핑)**은 객체지향 언어의 **객체(Python의 클래스/인스턴스)**와 관계형 데이터베이스(RDBMS)의 **테이블(Row/Column)**을 자동으로 연결(매핑)해 주는
+  기술입니다.
+
+  복잡한 SQL 쿼리문(SELECT, INSERT 등)을 문자열로 일일이 작성하지 않고도, 일반적인 파이썬 객체를 다루듯이 데이터베이스의 데이터를 저장, 조회, 수정할 수 있도록
+  돕습니다.
+  ──────
+  ### 1. SQL 직접 작성 vs ORM 비교
+
+  #### ❌ SQL을 직접 작성할 때 (레거시 방식)
+
+    # 문자열로 SQL을 조합하므로 오타가 나기 쉽고, SQL Injection 공격 위험이 있음
+    cursor.execute(
+        "INSERT INTO chats (user_id, question, answer) VALUES (?, ?, ?)",
+        (user_id, question, answer)
+    )
+
+  #### ✅ ORM을 사용할 때 (AskMate 방식: SQLAlchemy 2.0)
+
+    # 파이썬 클래스의 인스턴스를 만들어 세션에 추가하면 끝!
+    chat = Chat(user_id=user_id, question=question, answer=answer)
+    db.add(chat)
+    db.commit()
+  ──────
+  ### 2. AskMate 프로젝트에서의 실제 ORM 활용 예시
+
+  우리 프로젝트는 파이썬 진영의 대표적인 ORM인 SQLAlchemy 2.0을 사용하고 있습니다.
+
+  1. 테이블을 파이썬 클래스로 정의 (chat.py:22-45):
+    class Chat(Base):
+        __tablename__ = "chats"
+
+        id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+        user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+        question: Mapped[str] = mapped_column(Text, nullable=False)
+        answer: Mapped[str] = mapped_column(Text, nullable=False)
+
+  2. 파이썬 코드로 안전하게 쿼리 (chat_db.py:102-107):
+    # 최근 대화 5쌍 조회
+    statement = (
+        select(Chat)
+        .where(Chat.user_id == user_id)
+        .order_by(Chat.created_at.desc(), Chat.id.desc())
+        .limit(5)
+    )
+    chats = list(db.scalars(statement))
+
+  ──────
+  ### 3. ORM을 사용하는 4가지 핵심 장점
+
+  1. 높은 개발 생산성과 가독성:
+      • 복잡한 SQL 문법 대신 직관적인 파이썬 메서드와 클래스 속성을 사용하므로 코드 작성이 빠르고 유지보수가 쉽습니다.
+  2. 보안 강화 (SQL Injection 원천 차단):
+      • 사용자 입력값이 SQL 문법으로 잘못 해석되지 않도록 ORM 내부에서 파라미터 바인딩을 자동으로 처리합니다.
+  3. 데이터베이스 엔진 독립성 (유연한 확장):
+      • 코드를 특정 데이터베이스 전용 SQL로 하드코딩하지 않기 때문에, 현재 사용 중인 SQLite에서 추후 대규모 트래픽 대비 PostgreSQL이나 MySQL로 교체할 때
+      애플리케이션 코드 수정 없이 설정 주소(DATABASE_URL)만 바꾸면 즉시 전환할 수 있습니다.
+  4. IDE 자동완성 및 타입 안정성:
+      • 코드 작성 시 에디터(IDE)가 chat.question, user.username 등의 필드를 자동완성해 주어 오타로 인한 런타임 에러를 사전에 방지합니다.
 ---
 
 ### 12.1 요청 단위 세션 라이프사이클 관리 (`Depends(get_db)`)
@@ -1166,6 +1226,80 @@ except SQLAlchemyError:
 
 - **기술적 이점**:
   - 무거운 DB 파일 읽기/쓰기가 진행되는 동안에도 FastAPI 메인 이벤트 루프는 쉬지 않고 다른 클라이언트의 로그인, 정적 파일 서빙, 헬스체크(`/health`)를 논블로킹으로 동시 처리할 수 있다.
+
+AskMate 프로젝트에서 **FastAPI가 데이터베이스(DB)를 처리하는 방식**은 역할 분리, 요청별 세션 관리, 비동기 스레드 풀 위임, 그리고 안전한 트랜잭션 관리로 이루어져 있습니다.
+
+---
+
+### 1. 계층 분리 구조 (Architecture)
+FastAPI 라우터에 DB 쿼리 코드를 직접 적지 않고 역할별로 계층을 나누어 관리합니다.
+
+* **ORM 모델 (`models/`)**: 파이썬 클래스(`User`, `Chat`)를 SQLAlchemy의 `Base` 클래스로 정의하여 SQLite 테이블과 1:1로 매핑합니다.
+* **연결 및 세션 관리 (`db_connect.py`)**: DB 엔진(`engine`)과 세션 생성기(`SessionLocal`)를 관리합니다.
+* **DB CRUD 전용 모듈 (`account_db.py`, `chat_db.py`)**: 실제 `select`, `insert` 등 DB 접근 함수들을 라우터와 분리하여 캡슐화합니다.
+* **API 라우터 (`account.py`, `llm.py` 등)**: HTTP 요청을 받아 CRUD 모듈을 호출하고 결과만 응답합니다.
+
+---
+
+### 2. 의존성 주입(`Depends`)과 요청별 세션 관리 (`get_db`)
+FastAPI의 `Depends` 시스템을 활용해 HTTP 요청이 들어올 때마다 독립된 DB 세션을 할당하고, 요청 처리가 끝나면 자동으로 세션을 닫습니다.
+
+```python
+# db_connect.py
+def get_db() -> Generator[Session, None, None]:
+    with SessionLocal() as session:
+        yield session
+```
+
+* **`yield` 제너레이터 패턴**: FastAPI가 요청 진입 시 `get_db()`에서 세션을 생성해 라우트 함수에 넘겨주고, 응답 반환 후 `yield` 다음으로 돌아와 세션을 안전하게 정리합니다.
+* **독립성 보장**: 각 요청마다 서로 다른 독립 DB 세션을 받으므로 요청 간 데이터 간섭이나 충돌을 막습니다.
+
+---
+
+### 3. 트랜잭션 관리 파이프라인 (`add` ➔ `flush` ➔ `commit` / `rollback`)
+데이터를 신규 저장할 때 원자적(Atomic) 트랜잭션을 보장하기 위해 4단계 패턴을 사용합니다.
+
+```python
+# account_db.py / chat_db.py 예시
+user = User(username=username, password_hash=password_hash)
+db.add(user)          # 1. 세션 작업 공간에 객체 등록
+try:
+    db.flush()        # 2. DB에 SQL을 전달하여 자동 생성된 PK(id) 확보
+    user_id = user.id
+    db.commit()       # 3. 트랜잭션 확정 (영구 저장)
+except SQLAlchemyError:
+    db.rollback()     # 4. 예외 발생 시 작업 취소 및 세션 복구
+    raise
+```
+
+* **`flush()`**: 트랜잭션을 확정(`commit`)하기 전에 미리 SQL을 실행하여 생성된 ID를 읽어옵니다.
+* **`rollback()`**: 저장 중 에러(예: 사용자명 중복, FK 오류 등)가 발생하면 `rollback()`을 실행해 미확정 변경을 취소하고 세션을 정상 상태로 돌려놓습니다.
+
+---
+
+### 4. 비동기 라우트와 동기 DB의 조화 (`run_in_threadpool`)
+FastAPI/Uvicorn은 단일 스레드 비동기 이벤트 루프(Event Loop)로 동작합니다. SQLite/SQLAlchemy 작업은 동기(blocking) I/O이므로, 비동기 라우트(`async def chat`)에서 직접 실행하면 이벤트 루프 전체가 일시 정지(Block)될 위험이 있습니다.
+
+이 문제를 해결하기 위해 Starlette의 **`run_in_threadpool`**을 사용하여 동기 DB 작업을 별도 스레드 풀에 위임합니다:
+
+```python
+# llm.py
+# 동기 DB 조회를 별도 스레드 풀로 보내 이벤트 루프 블로킹 차단
+chats = await run_in_threadpool(get_recent_chats_by_user, db, user_id)
+...
+# 동기 DB 저장을 스레드 풀에서 실행
+chat_id = await run_in_threadpool(create_chat, db, user_id, payload.question, answer)
+```
+
+이 방식을 통해 DB 연산이 수행되는 동안에도 메인 이벤트 루프가 멈추지 않고 다른 사용자의 요청을 계속 처리할 수 있습니다.
+
+---
+
+### 5. SQLite 설정 및 생명주기 관리
+* **외래키 활성화 (`PRAGMA foreign_keys=ON`)**: SQLite는 기본적으로 외래키 제약이 꺼져 있으므로 연결 이벤트 시 커넥션 리스너로 `PRAGMA foreign_keys=ON`을 자동 실행합니다.
+* **스레드 제한 해제 (`check_same_thread=False`)**: 스레드 풀에서 DB 세션을 이용할 수 있도록 연결 옵션을 부여합니다.
+* **민감 정보 노출 차단 (`hide_parameters=True`)**: DB 로그 출력 시 비밀번호 해시 등 파라미터가 로그 파일에 노출되지 않도록 차단합니다.
+* **앱 생명주기 (`lifespan`)**: 서버 시작 시 `init_db()`를 호출해 없는 테이블을 자동 생성하고, 서버 종료 시 `engine.dispose()`로 엔진 연결을 정리합니다.
 
 ---
 
