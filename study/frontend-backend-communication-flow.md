@@ -1,4 +1,4 @@
-# 프론트엔드&배엔드
+# 프론트엔드 & 백엔드
 프론트엔드는 사용자가 직접 보고 상호작용하는 화면 영역이며, 백엔드는 보이지 않는 곳에서 데이터를 처리하고 저장하는 서버 영역입니다.
 
 **프론트엔드 (Frontend)**
@@ -584,7 +584,508 @@ HTTP 204 No Content 응답 반환
 
 ---
 
-## 11. 핵심 요약
+## 11. 웹 통신 및 대화 처리 1~5단계 기술 심층 분석 (파일명 및 주요 코드 스니펫)
+
+AskMate의 사용자 인터랙션부터 AI 응답 출력, 그리고 안전한 로그아웃에 이르는 1~5단계 전체 흐름을 프론트엔드와 백엔드의 구체적인 파일명, 함수/라우터명, 실제 소스코드 스니펫과 함께 상세히 분석한다.
+
+---
+
+### 1단계: 초기 렌더링 및 화면 구성
+
+사용자가 브라우저 주소창에 `/chat`을 입력하거나 로그인 성공 후 이동할 때, 서버가 세션을 검증하고 Jinja2 템플릿을 통해 개인화된 HTML 문서를 생성하여 응답하는 단계이다.
+
+#### 1. 관련 파일 및 주요 심볼
+- **백엔드 라우터**: `backend/app/pages.py`의 `chat_page`
+- **인증 의존성**: `backend/app/auth.py`의 `get_session_user`
+- **Jinja2 템플릿**:
+  - `backend/app/templates/base.html` (공통 레이아웃 및 네비게이션)
+  - `backend/app/templates/chat.html` (채팅 전용 화면 구조)
+
+#### 2. 핵심 소스코드 스니펫
+
+##### [백엔드] `backend/app/pages.py` - 세션 검증 및 303 Redirect / Jinja2 렌더링
+```python
+@router.get("/chat", response_class=HTMLResponse)
+def chat_page(request: Request, user: Annotated[User | None, Depends(get_session_user)]):
+    """AI 대화창 HTML 화면을 렌더링합니다. 로그인이 필요한 보호된 페이지입니다.
+
+    [기술 설명]
+    1. 비로그인 상태(`user is None`)인 경우 접근을 제한하고 `/login`으로 303 리다이렉트합니다.
+    2. 로그인 상태인 경우 사용자 정보(`user`)를 템플릿 컨텍스트에 전달하여 네비게이션 바 등에
+       사용자명이 표시될 수 있도록 렌더링합니다.
+    3. `Cache-Control: no-store` 헤더를 설정하여 비인가 단말 캐싱을 방지합니다.
+    """
+    if user is None:
+        return RedirectResponse(url="/login", status_code=303)
+    return templates.TemplateResponse(
+        request=request, name="chat.html", context={"user": user}, headers={"Cache-Control": "no-store"}
+    )
+```
+
+##### [백엔드] `backend/app/auth.py` - 세션 쿠키 검증 및 고스트 세션 방어
+```python
+def get_session_user(request: Request, db: Annotated[Session, Depends(get_db)]) -> User | None:
+    """현재 요청의 쿠키 세션에서 사용자 식별자를 읽어 DB의 User 객체를 반환합니다."""
+    user_id = request.session.get("user_id")
+    if user_id is None:
+        return None
+    try:
+        user = get_user_by_id(db, user_id)
+    except SQLAlchemyError:
+        logger.exception("db_read_failure operation=session")
+        raise HTTPException(status_code=500, detail="로그인 정보를 확인하지 못했습니다.") from None
+    if user is None:
+        # DB에 사용자가 존재하지 않는데 세션만 남아있는 고스트 세션 상태 정리
+        request.session.clear()
+    return user
+```
+
+##### [템플릿 상속 및 변수 대입] `backend/app/templates/base.html` & `chat.html`
+```html
+<!-- base.html: 공통 상단 네비게이션 바 -->
+<nav class="nav-menu" aria-label="주 메뉴">
+    {% if user %}
+    <a href="{{ url_for('chat_page') }}" class="nav-link {% if request.url.path == '/chat' %}active{% endif %}">채팅</a>
+    <a href="{{ url_for('history_page') }}" class="nav-link {% if request.url.path == '/history' %}active{% endif %}">대화 기록</a>
+    <div class="user-profile-menu">
+        <span class="user-badge" title="로그인 사용자">
+            <span class="user-avatar">👤</span>
+            <strong class="user-name" id="navUsername">{{ user.username }}</strong>
+        </span>
+        <button type="button" class="btn btn-outline btn-sm logout-btn" id="navLogoutBtn">로그아웃</button>
+    </div>
+    {% else %}
+    <!-- 비로그인 메뉴 -->
+    {% endif %}
+</nav>
+
+<!-- chat.html: base.html을 상속받아 채팅 화면 구현 -->
+{% extends "base.html" %}
+{% block title %}채팅{% endblock %}
+{% block content %}
+<div class="chat-container">
+    <div class="chat-card">
+        <!-- 환영 메시지: Jinja2 변수({{ user.username }}) 치환 -->
+        <div id="chatMessages" class="chat-messages" role="log" aria-live="polite">
+            <div class="chat-bubble ai-bubble intro-bubble">
+                <div class="bubble-avatar">🤖</div>
+                <div class="bubble-body">
+                    <div class="bubble-author">AskMate AI</div>
+                    <div class="bubble-content">안녕하세요, <strong>{{ user.username }}</strong>님! 무엇이든 편하게 물어보세요.</div>
+                </div>
+            </div>
+        </div>
+        ...
+    </div>
+</div>
+{% endblock %}
+```
+
+#### 3. 핵심 동작 원리 및 보안 메커니즘
+1. **세션 쿠키 검증**: 클라이언트가 보낸 `askmate_session` 서명 쿠키를 `SessionMiddleware`가 복호화하고, `get_session_user` 의존성이 세션 내부의 `user_id`를 추출하여 DB에서 실제 유저를 조회한다.
+2. **보호된 라우트 및 HTTP 303 Redirect**: 비인가 사용자(`user is None`)가 `/chat`에 직접 접근하면 서버는 즉시 `303 See Other` 상태 코드와 함께 `Location: /login` 헤더를 반환하여 로그인 페이지로 안전하게 튕겨낸다.
+3. **템플릿 컨텍스트 바인딩**: 인증된 사용자인 경우 `context={"user": user}`를 전달하여, Jinja2 엔진이 서버 사이드에서 `{{ user.username }}`을 실제 사용자명(예: `minsu`)으로 치환한 완전한 HTML 텍스트를 생성하여 전송한다.
+4. **캐싱 방지 (`Cache-Control: no-store`)**: 개인정보가 포함된 동적 HTML 페이지가 브라우저나 중간 프록시 캐시에 영구 저장되지 않도록 강제하여 공용 PC에서의 뒤로가기 정보 유출을 차단한다.
+
+---
+
+### 2단계: 폼 이벤트 등록 및 자바스크립트 제어
+
+브라우저가 HTML을 파싱하고 `DOMContentLoaded` 이벤트가 발생하면, `chat.js`가 로드되어 DOM 요소를 탐색하고 사용자 입력(글자 수 제한, 한글 IME 조합 처리, 단축키)을 제어하는 이벤트 리스너를 바인딩한다.
+
+#### 1. 관련 파일 및 주요 심볼
+- **프론트엔드 스크립트**: `backend/app/static/js/chat.js`
+- **주요 함수/이벤트**:
+  - `updateCharCounter()`: 실시간 글자 수 카운팅 및 1,000자 초과 방어
+  - `chatInput.addEventListener("compositionstart" / "compositionend")`: 한글 IME 조합 상태 추적
+  - `chatInput.addEventListener("keydown")`: Enter 단독 전송 / `Shift + Enter` 줄바꿈 분기
+  - `form.addEventListener("submit")`: `event.preventDefault()` 기본 폼 제출 차단
+
+#### 2. 핵심 소스코드 스니펫
+
+##### [프론트엔드] `backend/app/static/js/chat.js` - DOM 탐색, IME 조합 방어 및 글자 수 검증
+```javascript
+document.addEventListener("DOMContentLoaded", () => {
+    const form = document.getElementById("chatForm");
+    if (!form) return;
+
+    // DOM 엘리먼트 참조
+    const chatInput = document.getElementById("chatInput");
+    const sendBtn = document.getElementById("chatSendBtn");
+    const charCounter = document.getElementById("charCounter");
+
+    // 상태 관리 플래그
+    let isSubmitting = false;     // API 통신 진행 중 여부
+    let isComposing = false;      // 한글/CJK IME 문자 조합 중 여부
+
+    /**
+     * 입력창 글자수 카운터를 갱신하고, 글자수 제한(1000자) 및 버튼 활성화 상태를 동기화합니다.
+     */
+    function updateCharCounter() {
+        const length = chatInput.value.length;
+        const trimmed = chatInput.value.trim();
+        charCounter.textContent = `${length} / 1000자`;
+
+        // 1000자 초과 시 경고 스타일 적용 및 전송 버튼 비활성화
+        if (length > 1000) {
+            charCounter.classList.add("limit-exceeded");
+            sendBtn.disabled = true;
+        } else {
+            charCounter.classList.remove("limit-exceeded");
+            // 전송 중이거나 공백만 있는 경우 전송 버튼 비활성화
+            sendBtn.disabled = isSubmitting || trimmed.length === 0;
+        }
+
+        // 입력 텍스트 높이에 맞춘 textarea 동적 리사이징 (최대 160px)
+        chatInput.style.height = "auto";
+        chatInput.style.height = `${Math.min(chatInput.scrollHeight, 160)}px`;
+    }
+
+    // 입력 이벤트 및 IME 조합 상태 감지 리스너 바인딩
+    chatInput.addEventListener("input", updateCharCounter);
+    chatInput.addEventListener("compositionstart", () => { isComposing = true; });
+    chatInput.addEventListener("compositionend", () => { isComposing = false; });
+
+    /**
+     * 키보드 단축키 이벤트:
+     * - Enter 단독 입력 시 질문 전송
+     * - Shift + Enter 입력 시 줄바꿈 허용
+     * - 한글 조합 중(isComposing, keyCode 229) Enter는 전송을 무시
+     */
+    chatInput.addEventListener("keydown", (e) => {
+        // IME 조합 확정 Enter는 전송이 아닙니다. 일부 브라우저는 keyCode 229만 전달하므로 함께 검사합니다.
+        if (isComposing || e.isComposing || e.keyCode === 229) return;
+        if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault(); // 기본 개행 방지
+            if (!sendBtn.disabled) {
+                // 폼의 submit 이벤트를 트리거하여 질문 전송 실행
+                form.dispatchEvent(new Event("submit", { cancelable: true }));
+            }
+        }
+    });
+});
+```
+
+#### 3. 핵심 동작 원리 및 클라이언트 유효성 검증
+1. **페이지 새로고침 방지 (`event.preventDefault()`)**: 폼이 제출될 때 브라우저의 기본 동작인 페이지 새로고침(Full Page Reload)을 차단하여 단일 페이지(SPA) 스타일의 매끄러운 사용자 경험을 유지한다.
+2. **한글 IME 중복 전송 방어**:
+   - 한글은 초성·중성·종성이 결합되는 조합 문자(IME)이므로, 글자 작성을 확정하기 위해 Enter를 누르면 브라우저에 따라 조합 확정용 `keydown`과 폼 제출 `keydown`이 연달아 발생하여 동일 질문이 2번 전송되거나 마지막 글자가 중복되는 버그가 발생한다.
+   - `compositionstart`, `compositionend` 이벤트 플래그(`isComposing`), 표준 `e.isComposing`, 구형 브라우저 호환용 `e.keyCode === 229`를 삼중으로 체크하여 조합 중 Enter는 전송을 원천 차단한다.
+3. **단축키 분기 (`Shift + Enter` vs `Enter`)**: `e.shiftKey`가 눌려있으면 텍스트 입력창 내 줄바꿈을 허용하고, `Enter` 단독일 때만 질문을 전송한다.
+4. **실시간 글자 수 및 공백 검증**: `trim()`을 적용하여 공백 문자열만 입력된 경우 전송 버튼을 비활성화(`disabled = true`)하며, 1,000자를 초과하면 카운터에 경고 색상을 표시하고 전송을 막는다.
+
+---
+
+### 3단계: 메시지 전송 및 비동기 API 통신
+
+사용자가 질문을 확정하면 프론트엔드가 CSRF 방어 헤더를 주입하여 백엔드로 비동기 HTTP 요청을 전송하고, 백엔드는 보안 인증, 입력값 유효성 검사, DB 문맥 조회(최근 5쌍), 비동기 OpenAI 연동까지의 AI 파이프라인을 실행한다.
+
+#### 1. 관련 파일 및 주요 심볼
+- **프론트엔드 비동기 래퍼**: `backend/app/static/js/common.js`의 `apiRequest`
+- **백엔드 보안 가드**: `backend/app/auth.py`의 `require_csrf_header`, `get_current_user`
+- **백엔드 AI 라우터**: `backend/app/llm.py`의 `ChatRequest`, `chat`
+- **DB 문맥 조회 DAL**: `backend/app/chat_db.py`의 `get_recent_chats_by_user`
+- **외부 AI 연동 모듈**: `backend/app/llm_connect.py`의 `generate_answer`, `AsyncOpenAI`
+
+#### 2. 핵심 소스코드 스니펫
+
+##### [프론트엔드] `backend/app/static/js/common.js` - `apiRequest` 래퍼 및 CSRF 헤더 자동 주입
+```javascript
+async function apiRequest(url, options = {}) {
+    const defaultHeaders = {
+        "Content-Type": "application/json",
+    };
+
+    // 상태 변경 요청(POST, PUT, DELETE)에 CSRF 방어 커스텀 헤더 필수 주입
+    const method = (options.method || "GET").toUpperCase();
+    if (method !== "GET" && method !== "HEAD") {
+        defaultHeaders["X-Requested-With"] = "XMLHttpRequest";
+    }
+
+    options.headers = { ...defaultHeaders, ...(options.headers || {}) };
+
+    if (options.body && typeof options.body === "object" && !(options.body instanceof FormData)) {
+        options.body = JSON.stringify(options.body);
+    }
+
+    const response = await fetch(url, options);
+    ...
+    return { ok: response.ok, status: response.status, data: await response.json() };
+}
+```
+
+##### [백엔드] `backend/app/auth.py` - CSRF 헤더 검증 및 엄격한 사용자 인증
+```python
+def require_csrf_header(
+    requested_with: Annotated[str | None, Header(alias="X-Requested-With")] = None,
+) -> None:
+    """모든 상태 변경(POST) 요청에 대해 커스텀 헤더 존재 여부를 검증하여 CSRF를 방어합니다."""
+    if requested_with != "XMLHttpRequest":
+        raise HTTPException(status_code=403, detail="X-Requested-With: XMLHttpRequest 헤더가 필요합니다.")
+
+def get_current_user(user: Annotated[User | None, Depends(get_session_user)]) -> User:
+    """비로그인 상태일 경우 즉시 HTTP 401 Unauthorized 예외를 발생시킵니다."""
+    if user is None:
+        raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
+    return user
+```
+
+##### [백엔드] `backend/app/llm.py` - 입력 검증 및 오케스트레이션 파이프라인
+```python
+class ChatRequest(BaseModel):
+    """Pydantic v2 StringConstraints를 활용한 질문 본문 검증"""
+    question: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)
+    ]
+
+@router.post("/chat", dependencies=[Depends(require_csrf_header)])
+async def chat(
+    payload: ChatRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    user_id = user.id
+
+    # 1. 최근 대화 문맥 5쌍 조회 (동기 DB 연산을 run_in_threadpool로 스레드 풀에 위임)
+    chats = await run_in_threadpool(get_recent_chats_by_user, db, user_id)
+
+    # 2. OpenAI 규격 메시지 리스트 평탄화 (과거 순서)
+    history: list[dict[str, str]] = []
+    for chat in chats:
+        history.extend([
+            {"role": "user", "content": chat.question},
+            {"role": "assistant", "content": chat.answer},
+        ])
+
+    # 3. 외부 AI 서비스 비동기 호출 및 502/504 상태 코드 변환 (에러 마스킹)
+    try:
+        answer = await llm_connect.generate_answer(payload.question, history=history)
+    except AITimeoutError:
+        raise HTTPException(status_code=504, detail="AI 응답이 지연되어 답변을 받지 못했습니다. 잠시 후 다시 시도해 주세요.")
+    except AIServiceError:
+        raise HTTPException(status_code=502, detail="AI 서비스에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.")
+
+    # 4. 검증된 질문·답변 한 쌍을 DB에 영구 저장 (AI 성공 시에만 원자적 저장)
+    await run_in_threadpool(create_chat, db, user_id, payload.question, answer)
+
+    return {"answer": answer}
+```
+
+##### [백엔드] `backend/app/chat_db.py` - 최신 5쌍 추출 및 오름차순 시간 복원
+```python
+def get_recent_chats_by_user(db: Session, user_id: int) -> list[Chat]:
+    statement = (
+        select(Chat)
+        .where(Chat.user_id == user_id)
+        .order_by(Chat.created_at.desc(), Chat.id.desc())
+        .limit(5)
+    )
+    chats = list(db.scalars(statement))
+    # LLM이 시간 순서대로 문맥을 이해할 수 있도록 오름차순(과거 -> 최근)으로 반전
+    chats.reverse()
+    return chats
+```
+
+##### [백엔드] `backend/app/llm_connect.py` - AsyncOpenAI 통신 및 방어적 응답 검증
+```python
+# 모듈 레벨에서 클라이언트를 재사용하여 커넥션 풀 유지 (max_retries=0으로 자동 중복 질의 방지)
+_client = AsyncOpenAI(api_key=AI_API_KEY, base_url=AI_BASE_URL, timeout=AI_TIMEOUT, max_retries=0)
+
+async def generate_answer(question: str, history: list[dict[str, str]]) -> str:
+    messages = [*history, {"role": "user", "content": question}]
+    try:
+        completion = await _client.chat.completions.create(model=AI_MODEL, messages=messages)
+    except APITimeoutError:
+        raise AITimeoutError("AI 응답이 제한 시간을 초과했습니다.") from None
+    except (OpenAIError, JSONDecodeError):
+        raise AIServiceError("AI 호출에 실패했습니다.") from None
+
+    # 응답 유효성 방어 검증: choices 존재 여부, content 타입 및 공백 여부 검사
+    ...
+    return answer
+```
+
+#### 3. 핵심 동작 원리 및 보안 메커니즘
+1. **CSRF 방어 (`X-Requested-With`)**: 일반적인 `<form>` 전송이나 써드파티 악성 링크로는 커스텀 HTTP 헤더를 실을 수 없다는 웹 표준 보안 특성을 이용하여 CSRF 공격을 완벽하게 차단한다.
+2. **비동기 이벤트 루프 최적화 (`run_in_threadpool`)**: FastAPI의 메인 스레드 이벤트 루프가 동기식 SQLite DB I/O로 인해 멈추지 않도록 스레드 풀에 위임하여 동시성 처리 성능을 극대화한다.
+3. **최근 5쌍 문맥 주입 및 정렬**: DB 인덱스를 활용해 `ORDER BY created_at DESC, id DESC LIMIT 5`로 최신 5쌍을 신속히 가져온 뒤, `chats.reverse()`로 오래된 순서로 복원하여 AI가 대화 문맥의 인과관계를 정확히 파악하도록 전달한다.
+4. **민감정보 마스킹 및 502/504 에러 변환**: OpenAI 통신 에러 발생 시 외부 서비스의 API Key나 내부 시스템 스택을 노출하지 않고 `AIServiceError`(502 Bad Gateway), `AITimeoutError`(504 Gateway Timeout)로 매핑하여 안전한 한국어 에러 메시지만 응답한다.
+5. **원자적 저장 원칙**: AI 응답 검증이 통과된 경우에만 `create_chat`을 호출하여, AI 오류 발생 시 쓰레기 데이터나 미완성 레코드가 DB에 남지 않도록 보장한다.
+
+---
+
+### 4단계: 화면의 부분 갱신 (DOM 조작)
+
+백엔드로부터 `HTTP 200`과 함께 JSON 데이터(`{"answer": "..."}`)가 도착하면, 프론트엔드는 전체 페이지를 새로고침하지 않고 자바스크립트 DOM API를 통해 채팅창에 AI 말풍선을 동적으로 추가한다.
+
+#### 1. 관련 파일 및 주요 심볼
+- **프론트엔드 스크립트**: `backend/app/static/js/chat.js`
+- **주요 함수/프로퍼티**:
+  - `appendMessage(role, text)`: 말풍선 DOM 동적 생성
+  - `textContent`: XSS 공격 무력화 텍스트 주입
+  - `chatMessages.appendChild(bubble)`: 메시지 영역에 노드 추가
+  - `scrollToBottom()`: 스크롤 자동 이동
+  - `hideLoadingBubble()`: 로딩 애니메이션 제거 및 입력창 상태 복구
+
+#### 2. 핵심 소스코드 스니펫
+
+##### [프론트엔드] `backend/app/static/js/chat.js` - 응답 처리 및 XSS 방어 말풍선 생성
+```javascript
+// 1. 응답 결과 처리 분기
+if (res.ok && res.data && res.data.answer) {
+    // 성공: AI 답변 말풍선 추가 및 실패 캐시 초기화
+    appendMessage("ai", res.data.answer);
+    lastFailedQuestion = "";
+} else {
+    // 실패: 에러 배너 노출 및 502/504 시 원클릭 재시도 버튼 활성화
+    lastFailedQuestion = question;
+    ...
+}
+
+/**
+ * 대화 영역에 새로운 메시지 말풍선 DOM을 생성하여 추가합니다.
+ */
+function appendMessage(role, text) {
+    const bubble = document.createElement("div");
+    bubble.className = `chat-bubble ${role}-bubble`;
+
+    const avatar = document.createElement("div");
+    avatar.className = "bubble-avatar";
+    avatar.textContent = role === "user" ? "👤" : "🤖";
+
+    const body = document.createElement("div");
+    body.className = "bubble-body";
+
+    const author = document.createElement("div");
+    author.className = "bubble-author";
+    author.textContent = role === "user" ? "나" : "AskMate AI";
+
+    const content = document.createElement("div");
+    content.className = "bubble-content";
+    // [보안 핵심] innerHTML 대신 textContent를 사용하여 악성 스크립트 실행(XSS) 원천 차단
+    content.textContent = text;
+
+    body.appendChild(author);
+    body.appendChild(content);
+    bubble.appendChild(avatar);
+    bubble.appendChild(body);
+
+    messagesContainer.appendChild(bubble);
+    scrollToBottom();
+    return bubble;
+}
+
+/**
+ * 대화 메시지 컨테이너의 스크롤을 항상 최하단으로 이동시킵니다.
+ */
+function scrollToBottom() {
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+```
+
+#### 3. 핵심 동작 원리 및 보안 메커니즘
+1. **XSS (Cross-Site Scripting) 원천 방어**:
+   - AI 답변이나 사용자 질문에 `<script>alert('hack')</script>`나 `<img src=x onerror=...>`와 같은 악성 HTML 태그가 포함되어 있더라도, `innerHTML`을 절대 사용하지 않고 `textContent`로 브라우저 메모리에 주입하므로 브라우저 엔진이 이를 순수 문자열(Plain Text)로만 해석하여 실행을 100% 무력화한다.
+2. **동적 DOM 조작 (appendChild)**:
+   - 서버에서 새로운 HTML 전체를 다시 받지 않고, `document.createElement`로 생성한 말풍선 엘리먼트만 `#chatMessages` 컨테이너의 자식으로 추가(`appendChild`)하므로 화면 깜빡임 없이 부드러운 채팅 UI를 제공한다.
+3. **자동 스크롤 및 입력창 초기화**:
+   - 새 메시지가 추가되면 `messagesContainer.scrollTop = messagesContainer.scrollHeight`를 호출하여 최하단으로 시야를 이동시킨다.
+   - 전송 중 비활성화되었던 전송 버튼과 입력창의 잠금을 해제(`isSubmitting = false`, `disabled = false`)하고, 포커스를 입력창으로 되돌려 연속 질문이 가능하도록 한다.
+4. **장애 내구성 (Fault Tolerance)과 원클릭 재시도**:
+   - AI 통신 장애(502/504) 발생 시 직전 질문을 `lastFailedQuestion` 변수에 보관하고 에러 배너와 함께 [다시 시도] 버튼을 노출한다.
+   - 사용자가 [다시 시도]를 누르면 질문을 다시 타이핑할 필요 없이 즉시 입력창에 복원되고 재전송된다.
+
+---
+
+### 5단계: 안전한 로그아웃 흐름
+
+상단 네비게이션 바의 로그아웃 버튼을 누르면 단순 링크 이동이 아닌 비동기 API 요청을 통해 서버 세션을 안전하게 파기하고, 응답 결과에 따라 페이지 이동을 제어하는 단계이다.
+
+#### 1. 관련 파일 및 주요 심볼
+- **프론트엔드 스크립트**: `backend/app/static/js/common.js`의 `initNavbar`, `apiRequest`
+- **백엔드 라우터**: `backend/app/account.py`의 `logout`
+- **응답 규격**: `HTTP 204 No Content`
+
+#### 2. 핵심 소스코드 스니펫
+
+##### [프론트엔드] `backend/app/static/js/common.js` - 로그아웃 버튼 중복 클릭 방지 및 204 처리
+```javascript
+function initNavbar() {
+    const logoutBtn = document.getElementById("navLogoutBtn");
+    const logoutError = document.getElementById("logoutError");
+    if (logoutBtn) {
+        logoutBtn.addEventListener("click", async () => {
+            if (logoutBtn.disabled) return;
+            logoutBtn.disabled = true; // 1. 중복 요청 차단을 위한 버튼 잠금
+            if (logoutError) logoutError.style.display = "none";
+
+            try {
+                // 2. POST /api/logout 비동기 요청 (CSRF 헤더 자동 주입)
+                const res = await apiRequest("/api/logout", {
+                    method: "POST",
+                    skipAuthRedirect: true, // 401 수신 시에도 핸들러 내부에서 수동 제어
+                });
+
+                // 3. 서버가 세션을 성공적으로 파기하고 204를 반환했을 때만 화면 이동
+                if (res.ok && res.status === 204) {
+                    window.location.assign("/login");
+                    return;
+                }
+
+                // 4. 실패 시 화면 이동 없이 제자리에 머물며 에러 배너 노출
+                if (logoutError) {
+                    logoutError.textContent = "로그아웃에 실패했습니다. 연결 상태를 확인하고 다시 시도해 주세요.";
+                    logoutError.style.display = "flex";
+                }
+            } finally {
+                // 5. 작업 종료 후 버튼 상태 복원 (재시도 허용)
+                logoutBtn.disabled = false;
+            }
+        });
+    }
+}
+
+// apiRequest 내부의 204 파싱 예외 방어:
+if (response.status === 204) {
+    // 본문이 없으므로 response.json() 파싱 시 발생하는 SyntaxError를 방지하고 즉시 반환
+    return { ok: true, status: 204, data: null };
+}
+```
+
+##### [백엔드] `backend/app/account.py` - 세션 데이터 삭제 및 204 No Content 반환
+```python
+@router.post("/logout", status_code=204, dependencies=[Depends(require_csrf_header)])
+def logout(request: Request) -> Response:
+    """현재 브라우저에 할당된 로그인 세션을 안전하게 초기화(로그아웃)합니다.
+
+    [기술 설명]
+    1. CSRF 방지 헤더를 확인합니다.
+    2. `request.session.clear()`를 호출하여 서버 측 세션 데이터를 비우고,
+       응답 시 클라이언트의 쿠키를 만료시키는 Set-Cookie 헤더를 전송합니다.
+    3. 이미 비로그인 상태이거나 세션이 만료된 상태에서 호출하더라도 에러 없이 멱등하게 204 No Content를 반환합니다.
+    """
+    logger.info("request_received path=/api/logout")
+    user_id = request.session.get("user_id")
+    request.session.clear()
+    logger.info("logout_success user_id=%s", user_id)
+    return Response(status_code=204, headers={"Cache-Control": "no-store"})
+```
+
+#### 3. 핵심 동작 원리 및 보안 메커니즘
+1. **서버 사이드 세션 완전 파기**:
+   - `request.session.clear()`를 실행하여 세션 저장소의 모든 키-값(`user_id` 등)을 즉시 삭제하고, 만료된 세션 쿠키를 클라이언트로 전송한다.
+2. **HTTP 204 No Content 및 JSON 파싱 방어**:
+   - 로그아웃 완료 시 본문 데이터가 필요 없으므로 HTTP 표준 상태 코드인 `204 No Content`를 반환한다.
+   - 프론트엔드의 `apiRequest`는 상태 코드가 204인 경우 `response.json()` 파싱을 시도하지 않고 즉시 리턴하여 불필요한 자바스크립트 문법 에러(`SyntaxError: Unexpected end of JSON input`)를 사전에 방지한다.
+3. **중복 클릭 방지 (Double-submit Prevention)**:
+   - 사용자가 로그아웃 버튼을 연타하더라도 첫 클릭 시 즉시 `logoutBtn.disabled = true`가 적용되어 중복 네트워크 요청이 발생하지 않는다.
+4. **엄격한 응답 검증 기반 화면 이동**:
+   - 서버 응답이 명확하게 204 성공일 때만 `window.location.assign("/login")`으로 이동한다.
+   - 네트워크 두절이나 서버 장애로 로그아웃 처리가 실패한 경우, 사용자를 무조건 로그인 화면으로 보내어 '로그아웃이 완료되었다'고 착각하게 만들지 않고, 에러 배너를 띄우며 버튼 잠금을 해제(`finally`)하여 즉시 재시도할 수 있도록 한다.
+
+---
+
+## 12. 핵심 요약
 
 - **배포 주소 접속 (`http://134.185.97.62/`)**:
   - 기본 HTTP 포트인 80번 포트로 OCI 호스트에 접근하여 Docker 포트포워딩을 통해 컨테이너 내부 Uvicorn(8000)으로 전달된다.
@@ -599,4 +1100,5 @@ HTTP 204 No Content 응답 반환
   - AI 호출이 성공하고 응답 검증을 통과했을 때만 질문과 답변을 SQLite DB에 저장한다. AI 오류 시에는 저장하지 않는다.
 - **로그아웃 안전성**:
   - 로그아웃은 서버 응답이 204 성공일 때만 페이지를 이동하며, 실패 시 에러 안내와 재시도를 지원한다.
+
 
