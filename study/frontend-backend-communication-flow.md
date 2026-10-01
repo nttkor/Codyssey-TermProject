@@ -1,3 +1,20 @@
+# 프론트엔드&배엔드
+프론트엔드는 사용자가 직접 보고 상호작용하는 화면 영역이며, 백엔드는 보이지 않는 곳에서 데이터를 처리하고 저장하는 서버 영역입니다.
+
+**프론트엔드 (Frontend)**
+
+* **역할**: 웹 브라우저에 표시되는 화면의 구조와 디자인, 그리고 [클릭, 입력, 화면 변경 등의 사용자 동작](https://github.com/nttkor/Codyssey-TermProject/blob/nttkor/study/frontend-backend-communication-flow.md#1-html-css-javascript%EC%9D%98-%EC%97%AD%ED%95%A0)을 담당합니다.
+* **주요 기술**: [HTML, CSS, JavaScript](https://github.com/nttkor/Codyssey-TermProject/blob/nttkor/study/frontend-backend-communication-flow.md#1-html-css-javascript%EC%9D%98-%EC%97%AD%ED%95%A0) 등을 사용합니다.
+* **비유**: 집의 뼈대(벽과 문), 인테리어 디자인, 그리고 전등을 켜고 끄는 스위치 겉면에 해당합니다.
+
+**백엔드 (Backend)**
+
+* **역할**: 로그인 인증, 데이터베이스 조회 및 저장, 외부 AI 연동 등 사용자 눈에 보이지 않는 서버 측의 모든 데이터 처리와 로직을 담당합니다.
+* **주요 기술**: 보고 계신 문서에 언급된 [FastAPI](https://github.com/nttkor/Codyssey-TermProject/blob/nttkor/study/frontend-backend-communication-flow.md#1-html-css-javascript%EC%9D%98-%EC%97%AD%ED%95%A0)를 비롯해 Java, Node.js, 데이터베이스 등을 사용합니다.
+* **비유**: 집의 벽 뒤에 숨겨져 실제 전기를 공급하고 물을 끌어오는 전기 배선이나 수도관 시스템에 해당합니다.
+
+즉, 사용자가 프론트엔드(화면)에서 특정 요청을 보내면, 백엔드(서버)가 해당 요청을 분석해 데이터를 가공한 뒤 다시 프론트엔드로 전달하여 화면에 결과를 띄워주는 흐름으로 동작합니다.
+
 # 프론트엔드와 백엔드 통신 흐름
 
 이 문서는 AskMate 프로젝트를 예시로, 사용자가 실제 배포된 공인 IP 주소인 **`http://134.185.97.62/`** 에 접속한 순간부터 최초 리다이렉트, 로그인 화면 로딩, 로그인 수행, `/chat` 채팅 화면 진입, 질문 전송과 AI 답변 표시, 로그아웃까지의 **전체 프론트엔드-백엔드-인프라 통신 흐름**을 알기 쉽게 설명한다.
