@@ -1,6 +1,6 @@
-# AskMate 프로젝트 AI 에이전트 작업 지침 (GEMINI.md)
+# AskMate 프로젝트 AI 에이전트 작업 지침 (GEMINI.md / AGENTS.md)
 
-이 문서는 Antigravity / Gemini AI 에이전트가 본 프로젝트(`Codyssey-TermProject`)에서 작업을 수행할 때 상시 적용되는 전역 규칙(Always-On Project Rules)입니다.
+이 문서는 Antigravity / Gemini AI 에이전트 및 각종 AI 에이전트가 본 프로젝트(`Codyssey-TermProject`)에서 작업을 수행할 때 상시 적용되는 전역 규칙(Always-On Project Rules)입니다.
 
 ---
 
@@ -46,3 +46,11 @@
    - 기존의 모든 주석, docstring, 비즈니스 로직을 온전히 유지하며, 새로운 코드를 작성하거나 수정할 때도 파일 개요, 함수 상세 docstring(Args, Returns, Raises), 보안/아키텍처 설명을 충실히 작성합니다.
 2. **보안 원칙 엄수**:
    - CSRF 방어 헤더(`X-Requested-With`), Argon2id 비밀번호 해싱, XSS 방어(`textContent`), SQL Injection 방지 및 민감정보(비밀번호, API 키) 로그 노출 방지 규칙을 철저히 준수합니다.
+
+---
+
+## 5. 전역 규칙 파일 상호 동기화 관리 (Dual Rule Synchronization)
+
+1. **상시 100% 동일 동기화**:
+   - `GEMINI.md`와 `AGENTS.md` 두 파일은 다양한 에이전트 환경(Antigravity, Cursor, Codex 등)의 완전한 호환성을 위해 항상 100% 동일한 내용으로 상호 동기화하여 유지 관리합니다.
+   - 지침이 수정되거나 추가될 경우 두 파일 모두에 즉시 반영하고 함께 커밋합니다.
